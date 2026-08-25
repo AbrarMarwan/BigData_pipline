@@ -4,10 +4,10 @@ import time
 from pymongo import MongoClient, UpdateOne
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.settings import MONGO_URI, DB_NAME, COLLECTION_RAW, COLLECTION_VALIDATED, COLLECTION_QUARANTINE
+from config.settings import MONGO_URI, DB_NAME, COLLECTION_RAW, COLLECTION_VALIDATED, COLLECTION_QUARANTINE, ELT_CHUNK_SIZE
 from src.quality_rules import validate_and_clean_record
 
-def process_elt_transformation(run_id, batch_chunk_size=1000):
+def process_elt_transformation(run_id, batch_chunk_size=ELT_CHUNK_SIZE):
     client = MongoClient(MONGO_URI)
     db = client[DB_NAME]
     
@@ -31,11 +31,9 @@ def process_elt_transformation(run_id, batch_chunk_size=1000):
     total_inserted = 0
     total_updated = 0
     error_cases_count = {}
-    
-    processed_so_far = 0
 
     for doc in raw_cursor:
-        raw_data = doc.get("record_raw", {})
+        raw_data = doc.get("raw_record", {})
         result = validate_and_clean_record(raw_data)
         status = result["status"]
         data = result["data"]
@@ -46,7 +44,7 @@ def process_elt_transformation(run_id, batch_chunk_size=1000):
             else:
                 count_corrected += 1
             
-            # Upsert بالاعتماد الحصري على المفتاح الفريد order_id
+            # Idempotent Upsert بناءً على order_id
             valid_bulk_ops.append(
                 UpdateOne(
                     {"order_id": data["order_id"]},
@@ -60,8 +58,6 @@ def process_elt_transformation(run_id, batch_chunk_size=1000):
             quarantine_docs.append(data)
             for err in data.get("error_codes", []):
                 error_cases_count[err] = error_cases_count.get(err, 0) + 1
-
-        processed_so_far += 1
 
         if len(valid_bulk_ops) >= batch_chunk_size:
             bulk_res = valid_col.bulk_write(valid_bulk_ops, ordered=False)
@@ -85,6 +81,7 @@ def process_elt_transformation(run_id, batch_chunk_size=1000):
     total_unchanged = (count_valid + count_corrected) - (total_inserted + total_updated)
     duration = time.time() - start_time
 
+    # فحص معادلة الاتساق الإلزامية (البند 6.11)
     consistency_passed = (total_raw_processed == total_raw_in_run)
     print(f"\n[ELT Pipeline] Finished {total_raw_processed} records in {duration:.2f}s")
     print(f"Consistency Check: {'PASSED (OK)' if consistency_passed else 'FAILED'}")
@@ -102,7 +99,7 @@ def process_elt_transformation(run_id, batch_chunk_size=1000):
         "count_inserted": total_inserted,
         "count_updated": total_updated,
         "count_unchanged": total_unchanged,
-        "counts_case_error": error_cases_count,
+        "error_case_counts": error_cases_count,
         "transformation_seconds": duration,
         "consistency_check": consistency_passed
     }

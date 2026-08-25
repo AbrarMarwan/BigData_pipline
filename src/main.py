@@ -13,8 +13,8 @@ from src.elt_pipeline import process_elt_transformation
 from src.metrics import save_metrics
 
 def main():
-    parser = argparse.ArgumentParser(description="Hybrid Big Data Pipeline CLI")
-    parser.add_argument("--file", required=True, help="Path to input CSV file")
+    parser = argparse.ArgumentParser(description="Hybrid Big Data Pipeline CLI (Midterm Project)")
+    parser.add_argument("--file", required=True, help="Path to input CSV dataset")
     args = parser.parse_args()
 
     init_mongo()
@@ -27,8 +27,7 @@ def main():
     else:
         load_stats = run_spark_loader(args.file, run_id)
 
-    # تطبيق مرحلة التنظيف والتحويل المركزية الموحدة (ELT)
-    elt_stats = process_elt_transformation(run_id, batch_chunk_size=5000)
+    elt_stats = process_elt_transformation(run_id)
 
     total_duration = time.time() - total_start
 
@@ -36,22 +35,22 @@ def main():
         "run_id": run_id,
         "file_name": os.path.basename(args.file),
         "file_size_mb": round(file_size_mb, 2),
-        "used_engine": engine,
-        "read_rows": load_stats.get("loaded_raw", 0),
-        "loaded_raw": load_stats.get("loaded_raw", 0),
-        "count_valid": elt_stats["count_valid"],
-        "count_corrected": elt_stats["count_corrected"],
-        "count_quarantine": elt_stats["count_quarantine"],
-        "count_inserted": elt_stats["count_inserted"],
-        "count_updated": elt_stats["count_updated"],
-        "count_unchanged": elt_stats["count_unchanged"],
-        "seconds_elapsed": round(total_duration, 2),
+        "engine_used": engine,
+        "rows_read": load_stats.get("loaded_raw", 0),
+        "raw_loaded": load_stats.get("loaded_raw", 0),
+        "valid_count": elt_stats["count_valid"],
+        "corrected_count": elt_stats["count_corrected"],
+        "quarantine_count": elt_stats["count_quarantine"],
+        "inserted_count": elt_stats["count_inserted"],
+        "updated_count": elt_stats["count_updated"],
+        "unchanged_count": elt_stats["count_unchanged"],
+        "elapsed_seconds": round(total_duration, 2),
         "throughput": round(load_stats.get("loaded_raw", 0) / total_duration, 2) if total_duration > 0 else 0,
         "engine_details": {
             "batch_size": load_stats.get("batch_size"),
             "partitions": load_stats.get("partitions")
         },
-        "counts_case_error": elt_stats["counts_case_error"],
+        "error_case_counts": elt_stats["error_case_counts"],
         "consistency_check": elt_stats["consistency_check"]
     }
 

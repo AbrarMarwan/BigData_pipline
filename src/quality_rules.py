@@ -2,6 +2,7 @@ import re
 import json
 from datetime import datetime
 
+# Rule 1: الأرقام العربية إلى لاتينية
 def normalize_arabic_digits(val):
     if not val:
         return val
@@ -10,12 +11,14 @@ def normalize_arabic_digits(val):
     trans = str.maketrans(arabic_digits, latin_digits)
     return str(val).translate(trans)
 
+# Rule 2: فواصل الآلاف
 def clean_thousand_separators(val):
     if not val:
         return val
     val = normalize_arabic_digits(val)
     return re.sub(r'(?<=\d),(?=\d)', '', str(val).strip())
 
+# Rule 3: توحيد العملة
 def standardize_currency(val):
     if not val:
         return "YER"
@@ -24,6 +27,7 @@ def standardize_currency(val):
         return "YER"
     return "YER"
 
+# Rule 4: السعر بالكلمات
 WORD_TO_NUM = {
     "ألف": 1000, "الف": 1000, "ألفان": 2000, "الفان": 2000, 
     "ألفين": 2000, "الفين": 2000, "ثلاثة آلاف": 3000, "ثلاثة الاف": 3000,
@@ -35,12 +39,14 @@ def parse_price_words(val):
     val_clean = str(val).strip()
     return str(WORD_TO_NUM.get(val_clean, val))
 
+# Rule 5: رقم الهاتف
 def clean_phone(val):
     if not val:
         return val
     val = normalize_arabic_digits(val)
     return re.sub(r'[\s\-\(\)\+]', '', str(val))
 
+# Rule 6: البريد الإلكتروني
 def clean_email(val):
     if not val:
         return val
@@ -48,6 +54,7 @@ def clean_email(val):
     val = re.sub(r'@+', '@', val)
     return re.sub(r'\.+', '.', val)
 
+# Rule 7: التاريخ
 def standardize_date(val):
     if not val:
         return None
@@ -69,13 +76,13 @@ def standardize_date(val):
             continue
     return None
 
+# Rule 8: المسافات والمرادفات
 def clean_string_status(val):
     if not val:
         return val
     return str(val).strip()
 
 def validate_and_clean_record(raw_dict):
-    # توحيد أسماء الحقول وإزالة المسافات والرموز المخفية
     clean_raw = {}
     for k, v in raw_dict.items():
         if k:
@@ -83,23 +90,23 @@ def validate_and_clean_record(raw_dict):
             clean_raw[k_clean] = v
 
     corrections = []
-    quarantine_reasons = []
+    quarantine_errors = []
 
-    # 1. order_id
+    # 1. فحص order_id
     order_id = str(clean_raw.get("order_id", "") or "").strip()
     if not order_id or order_id.lower() in ["null", "none", "nan", ""]:
-        quarantine_reasons.append("ID_ORDER_MISSING")
+        quarantine_errors.append("MISSING_ORDER_ID")
 
-    # 2. customer_id
+    # 2. فحص customer_id
     customer_id = str(clean_raw.get("customer_id", "") or "").strip()
     if not customer_id or customer_id.lower() in ["null", "none", "nan", ""]:
-        quarantine_reasons.append("ID_CUSTOMER_MISSING")
+        quarantine_errors.append("MISSING_CUSTOMER_ID")
 
-    # 3. order_date
+    # 3. فحص التاريخ
     raw_date = str(clean_raw.get("order_date", "") or "").strip()
     norm_date = standardize_date(raw_date)
     if not norm_date:
-        quarantine_reasons.append("DATE_IMPOSSIBLE_INVALID")
+        quarantine_errors.append("INVALID_IMPOSSIBLE_DATE")
     elif norm_date != raw_date:
         corrections.append({
             "field": "order_date",
@@ -108,44 +115,68 @@ def validate_and_clean_record(raw_dict):
             "rule_code": "DATE_STANDARDIZED"
         })
 
-    # 4. items_json فحص وتصحيح JSON المعطوب والرموز المزدوجة
+    # 4. فحص items_json
     items_raw = str(clean_raw.get("items_json", "") or "").strip()
+    items_parsed = None
     if not items_raw or items_raw in ["[]", "{}", '""', "''"]:
-        quarantine_reasons.append("ITEMS_EMPTY")
+        quarantine_errors.append("EMPTY_ITEMS")
     else:
-        # إزالة علامات التنصيص الزائدة والهروب المزدوج الناتج عن CSV
         cleaned_json = items_raw
         if cleaned_json.startswith('"') and cleaned_json.endswith('"') and len(cleaned_json) > 1:
             cleaned_json = cleaned_json[1:-1]
         cleaned_json = cleaned_json.replace('""', '"').replace('\\"', '"').replace("'", '"').strip()
-        
-        # التأكد من إغلاق المصفوفة إذا قُطعت
         if cleaned_json.startswith('[') and not cleaned_json.endswith(']'):
             cleaned_json += '}]' if cleaned_json.endswith('}') else ']'
 
         try:
-            parsed_json = json.loads(cleaned_json)
-            if not parsed_json:
-                quarantine_reasons.append("ITEMS_EMPTY")
+            items_parsed = json.loads(cleaned_json)
+            if not items_parsed:
+                quarantine_errors.append("EMPTY_ITEMS")
             else:
                 if cleaned_json != items_raw:
                     corrections.append({
                         "field": "items_json",
                         "original_value": items_raw,
-                        "corrected_value": json.dumps(parsed_json, ensure_ascii=False),
+                        "corrected_value": json.dumps(items_parsed, ensure_ascii=False),
                         "rule_code": "JSON_SYNTAX_REPAIRED"
                     })
-                clean_raw["items_json"] = json.dumps(parsed_json, ensure_ascii=False)
         except Exception:
-            quarantine_reasons.append("JSON_ITEMS_CORRUPTED")
-        
+            quarantine_errors.append("CORRUPTED_ITEMS_JSON")
 
+    # فحص القيم المالية والسالبة
+    for field in ["delivery_cost", "payment_amount", "total_amount"]:
+        orig = str(clean_raw.get(field, "") or "")
+        parsed_words = parse_price_words(orig)
+        cleaned_num_str = clean_thousand_separators(parsed_words)
+        try:
+            num_val = float(cleaned_num_str) if cleaned_num_str else 0.0
+            if num_val < 0:
+                quarantine_errors.append("AMBIGUOUS_NEGATIVE_VALUE")
+        except ValueError:
+            pass
+
+    # إذا وجد خطأ عزل فادح -> يتم تحويل السجل مباشرة إلى Quarantine
+    if quarantine_errors:
+        if len(quarantine_errors) > 1:
+            quarantine_errors.append("MULTIPLE_CONFLICTING_ERRORS")
+        return {
+            "status": "quarantined",
+            "data": {
+                "order_id": order_id if order_id else None,
+                "error_codes": list(set(quarantine_errors)),
+                "raw_record": raw_dict
+            }
+        }
+
+    # إذا كان السجل سليماً أو قابلاً للتصحيح
     clean_data = dict(clean_raw)
     clean_data["order_id"] = order_id
     clean_data["customer_id"] = customer_id
     clean_data["order_date"] = norm_date
+    if items_parsed:
+        clean_data["items_json"] = json.dumps(items_parsed, ensure_ascii=False)
 
-    # معالجة بقية الحقول...
+    # تطبيق بقية قواعد التصحيح مع الـ Audit Trail
     raw_email = str(clean_raw.get("customer_email", "") or "")
     c_email = clean_email(raw_email)
     if c_email != raw_email:
