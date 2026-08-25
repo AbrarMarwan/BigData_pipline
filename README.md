@@ -130,19 +130,22 @@ $$\text{Total Raw} = \text{Validated} + \text{Quarantined}$$
 
 
 ---
-
 ## 📸 6. أدلة التشغيل والتنفيذ (Screenshots)
 
 ### 1. إثبات سرعة ومعدل تدفق PySpark (30 مليون سجل)
+![إثبات سرعة سبارك](./reports/screenshots/spark_throughput_30m.png)
 
 ### 2. إثبات نجاح فحص الاتساق الرياضي
+![فحص الاتساق](./reports/screenshots/consistency_passed.png)
 
 ### 3. استعراض مجموعات MongoDB Compass
+![مجموعات مونجو](./reports/screenshots/mongo_collections.png)
 
 ### 4. عينة سجل مصحح مع أثر التعديل (Audit Trail)
+![سجل مصحح](./reports/screenshots/validated_sample.png)
 
 ### 5. عينة سجل معزول في الحجر الصحي (Quarantine)
-
+![سجل معزول](./reports/screenshots/quarantine_sample.png)
 ---
 
 ## 💻 7. دليل التشغيل (How to Run)
