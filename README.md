@@ -21,7 +21,7 @@
 
 <div align="center">
 
-### **أبرار إبراهيم يحيى الأخفش**
+### **المهندسة: أبرار مروان الدبعي**
 **مهندسة ذكاء اصطناعي وباحثة في هندسة البيانات الضخمة**
 
 [![GitHub](https://img.shields.io/badge/GitHub-AbrarMarwan-181717?style=for-the-badge&logo=github)](https://github.com/AbrarMarwan)
