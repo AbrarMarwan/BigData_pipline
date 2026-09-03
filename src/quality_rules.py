@@ -2,7 +2,7 @@ import re
 import json
 from datetime import datetime
 
-# Rule 1: الأرقام العربية إلى لاتينية
+# Rule 1: تحويل الأرقام المشرقية (العربية) إلى أرقام لاتينية
 def normalize_arabic_digits(val):
     if not val:
         return val
@@ -11,23 +11,30 @@ def normalize_arabic_digits(val):
     trans = str.maketrans(arabic_digits, latin_digits)
     return str(val).translate(trans)
 
-# Rule 2: فواصل الآلاف
+# Rule 2: إزالة فواصل الآلاف
 def clean_thousand_separators(val):
     if not val:
         return val
     val = normalize_arabic_digits(val)
     return re.sub(r'(?<=\d),(?=\d)', '', str(val).strip())
 
-# Rule 3: توحيد العملة
+# Rule 3: فحص وتوحيد العملات المقبولة
+VALID_CURRENCIES = {"YER", "SAR", "USD"}
 def standardize_currency(val):
     if not val:
         return "YER"
-    val = str(val).strip()
-    if val in ["لاير", "لاير يمني", "ريال", "ريال يمني", "YER", "YER "]:
+    val_clean = str(val).strip().upper()
+    if val_clean in ["لاير", "لاير يمني", "ريال", "ريال يمني", "YER"]:
         return "YER"
-    return "YER"
+    if val_clean in ["سعودي", "ريال سعودي", "SAR"]:
+        return "SAR"
+    if val_clean in ["دولار", "دولار امريكي", "USD"]:
+        return "USD"
+    if val_clean in VALID_CURRENCIES:
+        return val_clean
+    return None
 
-# Rule 4: السعر بالكلمات
+# Rule 4: معالجة الأسعار المكتوبة بالكلمات
 WORD_TO_NUM = {
     "ألف": 1000, "الف": 1000, "ألفان": 2000, "الفان": 2000, 
     "ألفين": 2000, "الفين": 2000, "ثلاثة آلاف": 3000, "ثلاثة الاف": 3000,
@@ -39,14 +46,31 @@ def parse_price_words(val):
     val_clean = str(val).strip()
     return str(WORD_TO_NUM.get(val_clean, val))
 
-# Rule 5: رقم الهاتف
-def clean_phone(val):
+# Rule 5: فحص وتوحيد رقم الهاتف اليمني (9 أرقام تبدأ بالمفاتيح المعتمدة)
+def validate_and_clean_yemeni_phone(val):
     if not val:
-        return val
-    val = normalize_arabic_digits(val)
-    return re.sub(r'[\s\-\(\)\+]', '', str(val))
+        return None, True, False  # إذا كان الحقل فارغاً لا يعتبر خطأ عزل
+    
+    raw_str = str(val).strip()
+    digits = normalize_arabic_digits(raw_str)
+    digits = re.sub(r'[\s\-\(\)\+]', '', digits)
+    
+    # معالجة المفتاح الدولي أو الصفر المحلي
+    if digits.startswith("00967"):
+        digits = digits[5:]
+    elif digits.startswith("967"):
+        digits = digits[3:]
+    elif digits.startswith("0") and len(digits) == 10:
+        digits = digits[1:]
+        
+    valid_prefixes = ("77", "78", "73", "71", "70")
+    if len(digits) == 9 and digits.startswith(valid_prefixes):
+        was_corrected = (digits != raw_str)
+        return digits, True, was_corrected
+        
+    return digits, False, False
 
-# Rule 6: البريد الإلكتروني
+# Rule 6: تنظيف البريد الإلكتروني من الرموز المكررة
 def clean_email(val):
     if not val:
         return val
@@ -54,7 +78,7 @@ def clean_email(val):
     val = re.sub(r'@+', '@', val)
     return re.sub(r'\.+', '.', val)
 
-# Rule 7: التاريخ
+# Rule 7: توحيد التاريخ مع فحص المنطقية
 def standardize_date(val):
     if not val:
         return None
@@ -76,11 +100,12 @@ def standardize_date(val):
             continue
     return None
 
-# Rule 8: المسافات والمرادفات
+# Rule 8: تنظيف المسافات المحيطة بالنصوص
 def clean_string_status(val):
     if not val:
-        return val
+        return ""
     return str(val).strip()
+
 
 def validate_and_clean_record(raw_dict):
     clean_raw = {}
@@ -102,18 +127,21 @@ def validate_and_clean_record(raw_dict):
     if not customer_id or customer_id.lower() in ["null", "none", "nan", ""]:
         quarantine_errors.append("MISSING_CUSTOMER_ID")
 
-    # 3. فحص التاريخ
+    # 3. فحص التاريخ ومعيار ISO القياسي
     raw_date = str(clean_raw.get("order_date", "") or "").strip()
     norm_date = standardize_date(raw_date)
     if not norm_date:
         quarantine_errors.append("INVALID_IMPOSSIBLE_DATE")
-    elif norm_date != raw_date:
-        corrections.append({
-            "field": "order_date",
-            "original_value": raw_date,
-            "corrected_value": norm_date,
-            "rule_code": "DATE_STANDARDIZED"
-        })
+    else:
+        # فحص هل التاريخ كان مكتوباً بالفعل بصيغة ISO القياسية (سواء احتوى وقتاً أو لا)
+        is_iso_standard = bool(re.match(r'^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}:\d{2})?$', raw_date))
+        if not is_iso_standard:
+            corrections.append({
+                "field": "order_date",
+                "original_value": raw_date,
+                "corrected_value": norm_date,
+                "rule_code": "DATE_STANDARDIZED"
+            })
 
     # 4. فحص items_json
     items_raw = str(clean_raw.get("items_json", "") or "").strip()
@@ -124,16 +152,21 @@ def validate_and_clean_record(raw_dict):
         cleaned_json = items_raw
         if cleaned_json.startswith('"') and cleaned_json.endswith('"') and len(cleaned_json) > 1:
             cleaned_json = cleaned_json[1:-1]
-        cleaned_json = cleaned_json.replace('""', '"').replace('\\"', '"').replace("'", '"').strip()
+            
+        cleaned_json = cleaned_json.replace('""', '"').replace('\\"', '"').strip()
+        
         if cleaned_json.startswith('[') and not cleaned_json.endswith(']'):
-            cleaned_json += '}]' if cleaned_json.endswith('}') else ']'
+            if cleaned_json.endswith('}'):
+                cleaned_json += ']'
+            elif not cleaned_json.endswith('"'):
+                cleaned_json += '"}]'
 
         try:
             items_parsed = json.loads(cleaned_json)
-            if not items_parsed:
+            if not items_parsed or not isinstance(items_parsed, list) or len(items_parsed) == 0:
                 quarantine_errors.append("EMPTY_ITEMS")
             else:
-                if cleaned_json != items_raw:
+                if cleaned_json != items_raw and ('""' in items_raw or '\\"' in items_raw or not items_raw.endswith(']')):
                     corrections.append({
                         "field": "items_json",
                         "original_value": items_raw,
@@ -143,9 +176,22 @@ def validate_and_clean_record(raw_dict):
         except Exception:
             quarantine_errors.append("CORRUPTED_ITEMS_JSON")
 
-    # فحص القيم المالية والسالبة
+    # 5. فحص العملة
+    raw_curr = str(clean_raw.get("currency", "") or "").strip()
+    c_curr = standardize_currency(raw_curr)
+    if not c_curr:
+        quarantine_errors.append("INVALID_CURRENCY")
+    elif raw_curr and c_curr != raw_curr.upper():
+        corrections.append({
+            "field": "currency",
+            "original_value": raw_curr,
+            "corrected_value": c_curr,
+            "rule_code": "CURRENCY_STANDARDIZED"
+        })
+
+    # 6. فحص الأرقام والقيم المالية والسالبة
     for field in ["delivery_cost", "payment_amount", "total_amount"]:
-        orig = str(clean_raw.get(field, "") or "")
+        orig = str(clean_raw.get(field, "") or "").strip()
         parsed_words = parse_price_words(orig)
         cleaned_num_str = clean_thousand_separators(parsed_words)
         try:
@@ -153,9 +199,15 @@ def validate_and_clean_record(raw_dict):
             if num_val < 0:
                 quarantine_errors.append("AMBIGUOUS_NEGATIVE_VALUE")
         except ValueError:
-            pass
+            quarantine_errors.append(f"INVALID_NUMERIC_{field.upper()}")
 
-    # إذا وجد خطأ عزل فادح -> يتم تحويل السجل مباشرة إلى Quarantine
+    # 7. فحص رقم الهاتف اليمني
+    raw_phone = str(clean_raw.get("customer_phone", "") or "").strip()
+    c_phone, is_valid_phone, phone_corrected = validate_and_clean_yemeni_phone(raw_phone)
+    if raw_phone and not is_valid_phone:
+        quarantine_errors.append("INVALID_YEMENI_PHONE")
+
+    # العزل المباشر إذا وُجدت أخطاء حاسمة
     if quarantine_errors:
         if len(quarantine_errors) > 1:
             quarantine_errors.append("MULTIPLE_CONFLICTING_ERRORS")
@@ -168,16 +220,27 @@ def validate_and_clean_record(raw_dict):
             }
         }
 
-    # إذا كان السجل سليماً أو قابلاً للتصحيح
+    # بناء بيانات السجل المقبول (Validated / Corrected)
     clean_data = dict(clean_raw)
     clean_data["order_id"] = order_id
     clean_data["customer_id"] = customer_id
     clean_data["order_date"] = norm_date
+    clean_data["currency"] = c_curr or "YER"
     if items_parsed:
         clean_data["items_json"] = json.dumps(items_parsed, ensure_ascii=False)
 
-    # تطبيق بقية قواعد التصحيح مع الـ Audit Trail
-    raw_email = str(clean_raw.get("customer_email", "") or "")
+    # معالجة الهاتف الصالح
+    if phone_corrected:
+        corrections.append({
+            "field": "customer_phone",
+            "original_value": raw_phone,
+            "corrected_value": c_phone,
+            "rule_code": "PHONE_NORMALIZED"
+        })
+    clean_data["customer_phone"] = c_phone or ""
+
+    # تصحيح البريد الإلكتروني
+    raw_email = str(clean_raw.get("customer_email", "") or "").strip()
     c_email = clean_email(raw_email)
     if c_email != raw_email:
         corrections.append({
@@ -186,54 +249,26 @@ def validate_and_clean_record(raw_dict):
             "corrected_value": c_email,
             "rule_code": "EMAIL_REPEATED_SYMBOLS"
         })
-        clean_data["customer_email"] = c_email
+    clean_data["customer_email"] = c_email
 
-    raw_phone = str(clean_raw.get("customer_phone", "") or "")
-    c_phone = clean_phone(raw_phone)
-    if c_phone != raw_phone:
-        corrections.append({
-            "field": "customer_phone",
-            "original_value": raw_phone,
-            "corrected_value": c_phone,
-            "rule_code": "PHONE_NORMALIZED"
-        })
-        clean_data["customer_phone"] = c_phone
-
-    raw_curr = str(clean_raw.get("currency", "") or "")
-    c_curr = standardize_currency(raw_curr)
-    if c_curr != raw_curr:
-        corrections.append({
-            "field": "currency",
-            "original_value": raw_curr,
-            "corrected_value": c_curr,
-            "rule_code": "CURRENCY_STANDARDIZED"
-        })
-        clean_data["currency"] = c_curr
-
+    # تصحيح الحقول المالية المكتوبة بكلمات أو فواصل
     for field in ["delivery_cost", "payment_amount", "total_amount"]:
-        orig = str(clean_raw.get(field, "") or "")
+        orig = str(clean_raw.get(field, "") or "").strip()
         parsed_words = parse_price_words(orig)
         cleaned_num = clean_thousand_separators(parsed_words)
-        if cleaned_num != orig:
+        if orig and cleaned_num != orig:
             corrections.append({
                 "field": field,
                 "original_value": orig,
                 "corrected_value": cleaned_num,
                 "rule_code": "NUMBER_NORMALIZED"
             })
-            clean_data[field] = cleaned_num
+        clean_data[field] = cleaned_num
 
+    # تنظيف المسافات البيضاء دون اعتبارها خطأ جودة
     for str_field in ["status", "payment_status", "delivery_type", "city", "district", "customer_name"]:
         orig = str(clean_raw.get(str_field, "") or "")
-        cleaned_str = clean_string_status(orig)
-        if cleaned_str != orig:
-            corrections.append({
-                "field": str_field,
-                "original_value": orig,
-                "corrected_value": cleaned_str,
-                "rule_code": "STRING_TRIMMED"
-            })
-            clean_data[str_field] = cleaned_str
+        clean_data[str_field] = clean_string_status(orig)
 
     quality_status = "corrected" if len(corrections) > 0 else "valid"
     clean_data["quality_status"] = quality_status

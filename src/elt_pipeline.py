@@ -35,9 +35,13 @@ def process_elt_transformation(run_id, batch_chunk_size=ELT_CHUNK_SIZE):
     for doc in raw_cursor:
         raw_data = doc.get("raw_record", {})
         result = validate_and_clean_record(raw_data)
-        status = result["status"]
-        data = result["data"]
+        
+        # حماية إضافية في حال أرجعت الدالة قيمة فارغة
+        if not result or not isinstance(result, dict):
+            continue
 
+        status = result.get("status")
+        data = result.get("data", {})
         if status in ["valid", "corrected"]:
             if status == "valid":
                 count_valid += 1
