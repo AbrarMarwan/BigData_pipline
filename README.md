@@ -1,137 +1,843 @@
-```markdown
 <div align="center">
 
-# ⚡ High-Throughput Hybrid ELT Big Data Pipeline
-### معمارية هجينة لمعالجة البيانات الضخمة والتحقق الموزع ونمط الحجر الصحي
+# ⚡ خط أنابيب ELT هجين عالي الأداء للبيانات الضخمة
 
-[![Python](https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Apache Spark](https://img.shields.io/badge/Apache%20Spark-3.5.5-orange?style=for-the-badge&logo=apachespark&logoColor=white)](https://spark.apache.org/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-WiredTiger-green?style=for-the-badge&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
-[![Architecture](https://img.shields.io/badge/Architecture-ELT%20Pattern-red?style=for-the-badge)](https://en.wikipedia.org/wiki/Extract,_load,_transform)
+### معمارية هجينة لمعالجة البيانات الضخمة، والتحقق من الجودة، والتصحيح الآلي، والحجر الصحي
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3.12-blue?style=for-the-badge&logo=python&logoColor=white">
+  <img src="https://img.shields.io/badge/Apache%20Spark-3.5.5-orange?style=for-the-badge&logo=apachespark&logoColor=white">
+  <img src="https://img.shields.io/badge/MongoDB-WiredTiger-green?style=for-the-badge&logo=mongodb&logoColor=white">
+  <img src="https://img.shields.io/badge/Architecture-ELT-red?style=for-the-badge">
+</p>
 
 <p align="center">
-  <b>خط بيانات متكامل لمعالجة واستيعاب 30 مليون سجل بكفاءة عالية عبر PySpark و Python Streaming Batch و MongoDB.</b>
+  <b>
+    خط بيانات متكامل لمعالجة واستيعاب 30 مليون سجل باستخدام
+    Python Batch وApache PySpark وMongoDB، مع الحفاظ على البيانات
+    الأصلية وتطبيق قواعد جودة البيانات والحجر الصحي.
+  </b>
 </p>
 
 </div>
 
 ---
 
-## 👩‍💻 إعداد وتطوير المشروع
+# 👩‍💻 إعداد وتطوير المشروع
 
 <div align="center">
 
-### **المهندسة: أبرار مروان الدبعي**
-**مهندسة ذكاء اصطناعي وباحثة في هندسة البيانات الضخمة**
+## **المهندسة: أبرار مروان الدبعي**
+
+### مهندسة ذكاء اصطناعي وباحثة في هندسة البيانات الضخمة
 
 [![GitHub](https://img.shields.io/badge/GitHub-AbrarMarwan-181717?style=for-the-badge&logo=github)](https://github.com/AbrarMarwan)
 
 </div>
 
-* **الجامعة:** جامعة الرازي — كلية الحاسوب وتكنولوجيا المعلومات.
-* **التخصص:** بكالوريوس ذكاء اصطناعي (المستوى الرابع).
-* **المقرر الأكاديمي:** البيانات الضخمة - العملي.
-* **إشراف:** م. عمر أبوسند.
+| البيان | التفاصيل |
+|---|---|
+| **الجامعة** | جامعة الرازي |
+| **الكلية** | كلية الحاسوب وتكنولوجيا المعلومات |
+| **التخصص** | بكالوريوس ذكاء اصطناعي |
+| **المستوى** | المستوى الرابع |
+| **المقرر** | البيانات الضخمة - العملي |
+| **المشرف** | م. عمر أبوسند |
 
 ---
 
-## 📌 1. نظرة عامة على المشروع (Overview)
+# 📌 1. نظرة عامة على المشروع
 
-يطبق المشروع خط بيانات هجين لمعالجة بيانات الطلبات الضخمة غير النظيفة وفق معمارية **ELT**:
-* تطبيق مبدأ **عدم فقدان البيانات (Zero Data Loss)** بتحميل السجلات أولاً إلى طبقة `orders_raw` دون حذف مسبق.
-* فرز وتصنيف السجلات آلياً إلى بيانات سليمة/مصححة في `orders_validated` أو معزولة في `orders_quarantine`.
+يطبق المشروع خط بيانات هجين لمعالجة بيانات الطلبات الضخمة وغير النظيفة
+وفق معمارية **ELT (Extract – Load – Transform)**.
+
+يعتمد المشروع على مبدأ **عدم فقدان البيانات (Zero Data Loss)**، حيث يتم
+تحميل البيانات كاملة إلى طبقة البيانات الخام `orders_raw` قبل تنفيذ أي
+عمليات فحص أو تصحيح.
+
+بعد ذلك يتم تحليل السجلات وتصنيفها إلى:
+
+- ✅ سجلات سليمة `Valid`
+- 🔧 سجلات تم تصحيحها `Corrected`
+- 🚨 سجلات غير قابلة للإصلاح وتم عزلها `Quarantined`
 
 ---
 
-## 🏗️ 2. مسار ومعمارية المعالجة (Pipeline Architecture)
+# 🏗️ 2. معمارية خط البيانات
 
 ```mermaid
-graph TD
-    A[الملف المصدر CSV] --> B{فحص حجم الملف}
-    B -- "أصغر من 200MB" --> C[Python Batch Loader]
-    B -- "200MB أو أكبر" --> D[Apache PySpark Engine]
-    C --> E[(MongoDB: orders_raw)]
-    D --> E
-    E --> F[محرك الفحص والجودة ELT]
-    F -- "سجلات سليمة ومصححة" --> G[(orders_validated)]
-    F -- "أخطاء وتلف هيكلي" --> H[(orders_quarantine)]
+flowchart TD
 
+    A["ملف CSV المصدر"] --> B{"فحص حجم الملف"}
+
+    B -->|"أقل من 200 MB"| C["Python Batch"]
+    B -->|"200 MB أو أكثر"| D["Apache PySpark"]
+
+    C --> E[("MongoDB<br/>orders_raw")]
+    D --> E
+
+    E --> F["محرك فحص جودة البيانات"]
+
+    F --> G["سليم / مصحح"]
+    F --> H["أخطاء غير قابلة للإصلاح"]
+
+    G --> I[("orders_validated")]
+    H --> J[("orders_quarantine")]
+
+    G --> K["Audit Trail"]
+````
+
+---
+
+# 🔀 3. التوجيه التلقائي للمحرك
+
+يتم اختيار محرك المعالجة تلقائيًا اعتمادًا على حجم الملف:
+
+| حجم الملف          | محرك المعالجة    |
+| ------------------ | ---------------- |
+| أقل من **200 MB**  | 🐍 Python Batch  |
+| **200 MB أو أكثر** | ⚡ Apache PySpark |
+
+وبذلك لا يحتاج المستخدم إلى اختيار المحرك يدويًا.
+
+---
+
+# 🔄 4. تسلسل عملية المعالجة
+
+```text
+                    ┌─────────────────────┐
+                    │      ملف CSV        │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+                    ┌─────────────────────┐
+                    │    Router الحجم     │
+                    └──────────┬──────────┘
+                               │
+               ┌───────────────┴───────────────┐
+               │                               │
+               ▼                               ▼
+       ملف أقل من 200MB                ملف 200MB أو أكثر
+               │                               │
+               ▼                               ▼
+       Python Batch Engine             Apache PySpark
+               │                               │
+               └───────────────┬───────────────┘
+                               ▼
+                     ┌──────────────────┐
+                     │   orders_raw     │
+                     │    Raw Layer     │
+                     └────────┬─────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │  فحص جودة البيانات │
+                    └────────┬─────────┘
+                             │
+                  ┌──────────┴──────────┐
+                  │                     │
+                  ▼                     ▼
+             Valid / Corrected     Quarantined
+                  │                     │
+                  ▼                     ▼
+        orders_validated       orders_quarantine
 ```
 
 ---
 
-## 💡 3. الركائز الهندسية الأساسية (Core Concepts)
+# 💡 5. الركائز الهندسية الأساسية
 
-* **التحميل الخام (Raw Layer):** حفظ كامل السجلات كما وردت مع ربطها بـ `run_id` والمصدر ورقم الصف.
-* **أثر التصحيح (Audit Trail):** توثيق التعديلات في مصفوفة `corrections` مع تحديد `rule_code` والقيم السابقة والجديدة.
-* **نمط الحجر الصحي (Quarantine Pattern):** عزل السجلات ذات الأخطاء الجوهرية (مثل فقدان `customer_id` أو تلف `items_json` أو أرقام هواتف غير يمنية) مع حفظ مصفوفة `error_codes` والنسخة الأصلية.
-* **الاتساق وعدم التكرار (Idempotency & Upsert):** اعتماد `order_id` كمفتاح فريد يمنع التكرار عند إعادة التشغيل مع تحقق معادلة الاتساق الرياضي:
+## 🗄️ التحميل الخام — Raw Layer
 
-$$\text{Total Raw} (30,000,000) = \text{Valid} (23,765,736) + \text{Corrected} (4,011,232) + \text{Quarantined} (2,223,032)$$
+يتم حفظ جميع السجلات الأصلية في:
 
----
+```text
+orders_raw
+```
 
-## 📊 4. نتائج القياس والأداء الفعلي (Performance Benchmarks)
+مع الاحتفاظ بمعلومات المصدر مثل:
 
-| المقياس | القيمة المسجلة الفعلية | الشرح الهندسي |
-| --- | --- | --- |
-| **إجمالي السجلات المعالجة** | **30,000,000** سجل | الحجم الكامل لبيانات الاختبار الفعلي (12.65GB). |
-| **زمن استيعاب البيانات (PySpark)** | **2,763.81** ثانية | حوالي 46 دقيقة لتدفق وتخزين 30 مليون سجل بالكامل. |
-| **معدل التدفق (Throughput)** | **10,854.6** سجل/ثانية | سرعة القراءة والكتابة الموزعة المتزامنة في MongoDB. |
-| **السجلات المستوعبة في Raw** | **30,000,000** سجل | نجاح حفظ كافة البيانات بنسبة 100% دون فقدان. |
-| **السجلات السليمة (Valid)** | **23,765,736** سجل | بيانات مطابقة للمواصفات دون الحاجة لأي تدخل. |
-| **السجلات المصححة (Corrected)** | **4,011,232** سجل | بيانات تم إصلاحها وتوحيدها مع توثيق Audit Trail. |
-| **سجلات العزل (Quarantine)** | **2,223,032** سجل | بيانات تالفة هيكلياً تم عزلها بنسبة واقعية (~7.4%). |
-| **فحص الاتساق الرياضي** | **PASSED (OK)** | تطابق المعادلة: $23,765,736 + 4,011,232 + 2,223,032 = 30,000,000$. |
-| **مقاييس الـ Upsert والتحديث** | Inserted: 27,489,117<br>
+```text
+run_id
+source_file
+source_row_number
+ingested_at
+engine_used
+raw_record
+```
 
-<br>Updated: 197,711<br>
-
-<br>Unchanged: 90,140 | إثبات الـ Idempotency ومعالجة التكرارات عبر الفهرس الفريد. |
+وهذا يضمن إمكانية الرجوع إلى البيانات الأصلية في أي وقت.
 
 ---
 
-## 🛠️ 5. قواعد فحص وتصحيح البيانات (Data Quality Rules)
+## 📝 أثر التصحيح — Audit Trail
 
-* **`DATE_STANDARDIZED`:** توحيد صيغ التواريخ المختلفة إلى صيغة `YYYY-MM-DD` مع الحفاظ على صيغة ISO القياسية كسجلات سليمة.
-* **`CURRENCY_STANDARDIZED`:** توحيد المرادفات المحلية ("ريال", "سعودي", "دولار") إلى الرموز المصرفية المعتمدة (`YER`, `SAR`, `USD`).
-* **`NUMBER_NORMALIZED`:** تحويل الأرقام المشرقية (٠-٩) إلى أرقام لاتينية، إزالة فواصل الآلاف، ومعالجة الأسعار المكتوبة بالكلمات ("ألفين").
-* **`PHONE_NORMALIZED` / `INVALID_YEMENI_PHONE`:** فحص أرقام الهواتف المكونة من 9 أرقام والمطابقة لشبكات الاتصالات اليمنية (`77`, `78`, `73`, `71`, `70`) وعزل الأرقام الوهمية أو غير المتطابقة.
-* **`EMAIL_REPEATED_SYMBOLS`:** معالجة تكرار علامات `@` أو النقاط الناتجة عن أخطاء الإدخال.
-* **`JSON_SYNTAX_REPAIRED`:** معالجة علامات الاقتباس المزدوجة وإصلاح الأقواس المبتورة لعناصر الـ JSON.
-* **`FATAL_CORRUPTION_ISOLATION`:** عزل الحالات الحرجة كغياب المعرفات الأساسية (`MISSING_ORDER_ID`, `MISSING_CUSTOMER_ID`) أو القيم المالية السالبة (`AMBIGUOUS_NEGATIVE_VALUE`).
+لا يتم تعديل البيانات بصمت.
+
+كل عملية تصحيح يتم توثيقها داخل `corrections` مع:
+
+```text
+field
+original_value
+corrected_value
+rule_code
+```
+
+مثال:
+
+```json
+{
+  "field": "currency",
+  "original_value": "ريال",
+  "corrected_value": "YER",
+  "rule_code": "CURRENCY_STANDARDIZED"
+}
+```
 
 ---
 
-## 📸 6. أدلة التشغيل والتنفيذ (Screenshots)
+## 🚨 الحجر الصحي — Quarantine
 
-### 1. إثبات سرعة ومعدل تدفق PySpark وفحص الاتساق الرياضي (30 مليون سجل)
+السجلات التي تحتوي على أخطاء جوهرية لا يمكن تصحيحها بأمان يتم عزلها
+داخل:
 
-### 2. استعراض مجموعات MongoDB Compass وقواعد البيانات
+```text
+orders_quarantine
+```
 
-### 3. عينة سجل معتمد ومطابق (Valid Record Sample)
-
-### 4. عينة سجل معزول في الحجر الصحي مع أكواد الخطأ (Quarantine Record Sample)
+مع الاحتفاظ بالبيانات الأصلية وأكواد الأخطاء.
 
 ---
 
-## 💻 7. دليل التشغيل (How to Run)
+## 🔑 المفتاح التجاري وIdempotency
+
+يعتمد النظام على:
+
+```text
+order_id
+```
+
+كمفتاح تجاري ثابت.
+
+ويتم استخدام **Unique Index + Upsert** لمنع تكرار السجلات عند إعادة
+تشغيل خط البيانات.
+
+---
+
+# 📊 6. نتائج القياس والأداء الفعلي
+
+تم تنفيذ الاختبار على مجموعة البيانات الضخمة الكاملة بحجم:
+
+**12.65 GB**
+
+وتتكون من:
+
+**30,000,000 سجل**
+
+| المقياس                                 |         القيمة الفعلية |
+| --------------------------------------- | ---------------------: |
+| 📦 إجمالي السجلات المعالجة              |         **30,000,000** |
+| ⚡ زمن استيعاب البيانات باستخدام PySpark |     **2,763.81 ثانية** |
+| 🚀 معدل التدفق Throughput               | **10,854.6 سجل/ثانية** |
+| 🗄️ السجلات المستوعبة في Raw            |         **30,000,000** |
+| ✅ السجلات السليمة Valid                 |         **23,765,736** |
+| 🔧 السجلات المصححة Corrected            |          **4,011,232** |
+| 🚨 سجلات الحجر الصحي Quarantined        |          **2,223,032** |
+| 🔐 فحص الاتساق الرياضي                  |        **PASSED (OK)** |
+
+### معادلة الاتساق
+
+```text
+23,765,736
++
+4,011,232
++
+2,223,032
+=
+30,000,000
+```
+
+وبالتالي:
+
+```text
+Total Raw
+=
+Valid
++
+Corrected
++
+Quarantined
+```
+
+### نتيجة الاتساق
+
+```text
+23,765,736 + 4,011,232 + 2,223,032
+=
+30,000,000
+```
+
+✅ **تم اجتياز فحص الاتساق بنجاح.**
+
+---
+
+# 🔄 7. مقاييس الـ Upsert وIdempotency
+
+| العملية       |          العدد |
+| ------------- | -------------: |
+| **Inserted**  | **27,489,117** |
+| **Updated**   |    **197,711** |
+| **Unchanged** |     **90,140** |
+
+توضح هذه النتائج قدرة النظام على التعامل مع إعادة المعالجة والتحديثات
+دون إنشاء نسخ مكررة من السجلات المعتمدة.
+
+---
+
+# 🧪 8. قواعد جودة البيانات
+
+يطبق المشروع مجموعة من قواعد فحص وتصحيح البيانات بشكل آلي.
+
+| قاعدة الجودة               | الوظيفة                                  |
+| -------------------------- | ---------------------------------------- |
+| `DATE_STANDARDIZED`        | توحيد صيغ التاريخ                        |
+| `CURRENCY_STANDARDIZED`    | توحيد صيغ العملات                        |
+| `NUMBER_NORMALIZED`        | تطبيع القيم الرقمية                      |
+| `PHONE_NORMALIZED`         | توحيد أرقام الهواتف                      |
+| `INVALID_YEMENI_PHONE`     | اكتشاف أرقام الهواتف اليمنية غير الصحيحة |
+| `EMAIL_REPEATED_SYMBOLS`   | معالجة تكرار الرموز في البريد الإلكتروني |
+| `JSON_SYNTAX_REPAIRED`     | إصلاح JSON القابل للإصلاح                |
+| `MISSING_ORDER_ID`         | عزل السجلات التي تفتقد رقم الطلب         |
+| `MISSING_CUSTOMER_ID`      | اكتشاف معرف العميل المفقود               |
+| `AMBIGUOUS_NEGATIVE_VALUE` | عزل القيم المالية السالبة غير الواضحة    |
+
+---
+
+# 📅 9. توحيد التواريخ
+
+يتم التعامل مع عدة صيغ للتاريخ، مثل:
+
+```text
+YYYY-MM-DDTHH:MM:SS
+YYYY-MM-DD HH:MM:SS
+YYYY-MM-DD
+YYYY/MM/DD
+DD/MM/YYYY
+MM/DD/YYYY
+```
+
+ثم يتم توحيد القيم القابلة للمعالجة إلى الصيغة القياسية.
+
+---
+
+# 💰 10. توحيد العملات
+
+يتم تحويل المرادفات المحلية إلى الرموز القياسية:
+
+```text
+ريال    → YER
+سعودي   → SAR
+دولار   → USD
+```
+
+---
+
+# 🔢 11. تطبيع الأرقام
+
+يتعامل النظام مع:
+
+* الأرقام العربية/المشرقية.
+* فواصل الآلاف.
+* الصيغ الرقمية المختلفة.
+* بعض القيم المكتوبة بالكلمات.
+
+مثال:
+
+```text
+١٢٥٠
+↓
+1250
+```
+
+---
+
+# 📱 12. فحص أرقام الهواتف
+
+يتم فحص أرقام الهواتف اليمنية والتحقق من توافقها مع البادئات المدعومة:
+
+```text
+77
+78
+73
+71
+70
+```
+
+ويتم تصنيف الأرقام غير الصحيحة أو الوهمية وفق قواعد الجودة.
+
+---
+
+# 🧾 13. معالجة JSON
+
+يتم فحص حقل:
+
+```text
+items_json
+```
+
+واكتشاف الحالات غير الصحيحة.
+
+إذا كان الخطأ قابلًا للإصلاح يتم تصحيحه وتسجيل العملية داخل:
+
+```text
+corrections
+```
+
+أما التلف الهيكلي غير القابل للإصلاح فيتم عزله داخل:
+
+```text
+orders_quarantine
+```
+
+---
+
+# 🗃️ 14. طبقات MongoDB
+
+يستخدم المشروع قاعدة البيانات:
+
+```text
+midterm_data_pipeline
+```
+
+وتتكون من:
+
+```text
+midterm_data_pipeline
+│
+├── orders_raw
+│
+├── orders_validated
+│
+└── orders_quarantine
+```
+
+### `orders_raw`
+
+البيانات الأصلية الكاملة.
+
+### `orders_validated`
+
+السجلات السليمة والمصححة.
+
+### `orders_quarantine`
+
+السجلات غير القابلة للإصلاح مع أكواد الأخطاء.
+
+---
+
+# 📈 15. المقاييس التي يوفرها النظام
+
+يتم تسجيل مجموعة من مؤشرات الأداء، منها:
+
+```text
+read_rows
+loaded_raw
+count_valid
+count_corrected
+count_quarantine
+throughput
+seconds_elapsed
+partitions
+consistency_check
+status
+```
+
+ويتم حفظ النتائج في:
+
+```text
+reports/results.json
+```
+
+---
+
+# 📁 16. هيكل المشروع
+
+```text
+minimal_corrected_project/
+│
+├── config/
+│   └── settings.py
+│
+├── data/
+│   ├── orders_sample.csv
+│   └── orders_huge_mixed_quality.csv
+│
+├── notebooks/
+│   ├── individual_pipeline.ipynb
+│   └── sample.ipynb
+│
+├── reports/
+│   └── results.json
+│
+├── src/
+│   ├── batch_loader.py
+│   ├── mongo.py
+│   ├── pipeline.py
+│   ├── quality_rules.py
+│   ├── router.py
+│   ├── sample.py
+│   └── spark_loader.py
+│
+├── tests/
+│   └── test_quality.py
+│
+├── run_analysis.py
+├── requirements.txt
+├── pytest.ini
+└── README.md
+```
+
+---
+
+# 🛠️ 17. التقنيات المستخدمة
+
+| التقنية                               | الاستخدام                                 |
+| ------------------------------------- | ----------------------------------------- |
+| 🐍 **Python 3.12**                    | معالجة الملفات الصغيرة وإدارة خط البيانات |
+| ⚡ **Apache Spark 3.5.5**              | معالجة البيانات الضخمة                    |
+| 🔥 **PySpark**                        | معالجة DataFrame الموزعة                  |
+| 🍃 **MongoDB**                        | تخزين Raw وValidated وQuarantine          |
+| 🔗 **PyMongo**                        | الاتصال بـMongoDB من Python               |
+| 🔌 **MongoDB Spark Connector 10.7.0** | ربط Spark بـMongoDB                       |
+| 🧪 **Pytest**                         | اختبار قواعد جودة البيانات                |
+
+---
+
+# ⚙️ 18. متطلبات التشغيل
+
+## Python
+
+```text
+Python 3.12
+```
+
+## Apache Spark
+
+```text
+Apache Spark 3.5.5
+```
+
+## MongoDB
+
+يجب تشغيل MongoDB محليًا باستخدام:
+
+```text
+mongodb://localhost:27017/
+```
+
+## Windows Hadoop Utilities
+
+يتطلب التشغيل المحلي وجود:
+
+```text
+C:\hadoop\bin\winutils.exe
+```
+
+ويتم استخدام مجلد مؤقت لـSpark:
+
+```text
+E:\spark_temp
+```
+
+---
+
+# 📦 19. تثبيت المتطلبات
+
+من داخل مجلد المشروع:
 
 ```bash
-# 1. تثبيت الحزم والمكتبات المطلوبة
 pip install -r requirements.txt
-
-# 2. تشغيل العينة الصغيرة (Python Batch Engine)
-python src/main.py --file data/sample_orders.csv
-
-# 3. تشغيل ملف البيانات الضخم (Apache PySpark Engine)
-python src/main.py --file data/orders_huge_mixed_quality.csv
-
-# 4. التحقق البرمجي من مجموعات وفهارس MongoDB
-python -c "from pymongo import MongoClient; client=MongoClient('mongodb://localhost:27017'); print(client['midterm_bigdata_db'].list_collection_names())"
-
 ```
 
+---
+
+# ▶️ 20. تشغيل المشروع
+
+يستخدم المشروع نقطة تشغيل واحدة:
+
+```bash
+python run_analysis.py
 ```
 
+يقوم البرنامج تلقائيًا بتشغيل المسارين:
+
+```text
+orders_sample.csv
+        ↓
+Python Batch
 ```
+
+و:
+
+```text
+orders_huge_mixed_quality.csv
+        ↓
+Apache PySpark
+```
+
+وبذلك يتم اختبار المسارين المطلوبين ضمن تشغيل واحد.
+
+---
+
+# 🧪 21. تشغيل الاختبارات
+
+لتشغيل اختبارات قواعد جودة البيانات:
+
+```bash
+pytest
+```
+
+أو:
+
+```bash
+python -m pytest
+```
+
+---
+
+# 📊 22. ملف النتائج
+
+بعد اكتمال التشغيل يتم إنشاء:
+
+```text
+reports/results.json
+```
+
+ويحتوي على نتائج التشغيل، ومنها:
+
+```text
+Router
+Processing Engine
+Records
+Valid
+Corrected
+Quarantined
+Throughput
+Partitions
+Consistency Check
+Status
+```
+
+---
+
+# 📸 23. أدلة التنفيذ
+
+يفضل إرفاق لقطات الشاشة التالية ضمن التقرير أو المستودع:
+
+### 1️⃣ إثبات الـRouter
+
+إظهار:
+
+```text
+Sample < 200 MB
+        ↓
+Python Batch
+
+Large ≥ 200 MB
+        ↓
+PySpark
+```
+
+### 2️⃣ MongoDB Compass
+
+إظهار قاعدة البيانات:
+
+```text
+midterm_data_pipeline
+│
+├── orders_raw
+├── orders_validated
+└── orders_quarantine
+```
+
+### 3️⃣ سجل Validated
+
+إظهار سجل يحتوي على:
+
+```text
+order_id
+quality_status
+corrections
+id_run
+record_raw
+```
+
+### 4️⃣ سجل Quarantine
+
+إظهار:
+
+```text
+error_codes
+details_error
+order_id
+record_raw
+```
+
+### 5️⃣ Audit Trail
+
+إظهار:
+
+```text
+field
+original_value
+corrected_value
+rule_code
+```
+
+### 6️⃣ نتائج الأداء
+
+إظهار:
+
+```text
+30,000,000 Records
+10,854.6 Records/sec
+2,763.81 Seconds
+Valid
+Corrected
+Quarantined
+Consistency: PASSED
+```
+
+---
+
+# 🔐 24. سلامة البيانات
+
+يعتمد المشروع على مبدأ:
+
+```text
+                ┌─────────────────┐
+                │    orders_raw   │
+                │   Zero Loss     │
+                └────────┬────────┘
+                         │
+                         ▼
+                ┌─────────────────┐
+                │  Quality Engine │
+                └────────┬────────┘
+                         │
+             ┌───────────┴───────────┐
+             │                       │
+             ▼                       ▼
+       Valid / Corrected       Quarantine
+```
+
+وبالتالي لا يتم حذف السجلات غير الصحيحة من المصدر، بل يتم الاحتفاظ بها
+وعزلها مع توثيق سبب العزل.
+
+---
+
+# 🚀 25. أبرز مميزات المشروع
+
+* ✅ معمارية Hybrid ELT
+* ✅ التوجيه التلقائي حسب حجم الملف
+* ✅ حد التوجيه 200 MB
+* ✅ Python Streaming Batch
+* ✅ Apache PySpark للملفات الضخمة
+* ✅ Raw Layer قبل معالجة الجودة
+* ✅ Zero Data Loss
+* ✅ Fixed Schema
+* ✅ MongoDB Integration
+* ✅ MongoDB Spark Connector
+* ✅ أكثر من 8 قواعد لجودة البيانات
+* ✅ Audit Trail
+* ✅ Quarantine Layer
+* ✅ Stable Business Key
+* ✅ Unique Index
+* ✅ Upsert
+* ✅ Idempotency
+* ✅ Consistency Check
+* ✅ Performance Metrics
+* ✅ Automated Tests
+
+---
+
+# 🎓 26. الأهداف الأكاديمية
+
+يجمع المشروع بين مجموعة من المفاهيم العملية في هندسة البيانات الضخمة:
+
+```text
+                ┌──────────────────────┐
+                │     Big Data         │
+                └──────────┬───────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+          ▼                ▼                ▼
+       ELT / ETL       Distributed       NoSQL
+                       Processing        Database
+          │                │                │
+          └────────────────┼────────────────┘
+                           │
+                           ▼
+                    Data Quality
+                           │
+                           ▼
+                  Audit & Lineage
+                           │
+                           ▼
+                    Idempotency
+```
+
+---
+
+# 🏆 27. النتيجة النهائية
+
+تم تصميم وتنفيذ خط بيانات هجين قادر على التعامل مع بيانات ضخمة تصل إلى:
+
+## **30 مليون سجل**
+
+وبحجم:
+
+## **12.65 GB**
+
+مع تحقيق:
+
+```text
+Raw Records        = 30,000,000
+Valid              = 23,765,736
+Corrected          = 4,011,232
+Quarantined        = 2,223,032
+```
+
+وفحص الاتساق:
+
+```text
+23,765,736
++
+4,011,232
++
+2,223,032
+=
+30,000,000
+```
+
+### ✅ CONSISTENCY CHECK: PASSED
+
+### 🚀 THROUGHPUT: 10,854.6 RECORDS/SECOND
+
+### ⏱️ PROCESSING TIME: 2,763.81 SECONDS
+
+### 🗄️ RAW INGESTION: 30,000,000 RECORDS
+
+---
+
+<div align="center">
+
+# ⚡ Hybrid ELT Big Data Pipeline
+
+### Python Batch • Apache PySpark • MongoDB • Data Quality • Audit Trail • Quarantine
+
+**إعداد: أبرار مروان الدبعي**
+
+</div>
+ 
