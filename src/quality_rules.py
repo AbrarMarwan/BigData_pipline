@@ -57,11 +57,24 @@ def clean_email(val):
 # Rule 7: التاريخ
 def standardize_date(val):
     if not val:
-        return None
-    val = normalize_arabic_digits(val).strip()
-    val = val.replace("T", " ")
-    val = re.sub(r'\s*/\s*', '/', val)
-    val = re.sub(r'\s*-\s*', '-', val)
+        return None, False
+    val_orig = str(val).strip()
+    # إذا كان التاريخ بالفعل بصيغة ISO القياسية وبنطاق زمني منطقي
+    if re.match(r'^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$', val_orig):
+        try:
+            if 'T' in val_orig:
+                dt = datetime.strptime(val_orig, '%Y-%m-%dT%H:%M:%S')
+            else:
+                dt = datetime.strptime(val_orig, '%Y-%m-%d')
+            if 1990 <= dt.year <= 2035:
+                return val_orig, False
+        except ValueError:
+            return None, False
+
+    val_clean = normalize_arabic_digits(val_orig).strip()
+    val_clean = val_clean.replace("T", " ")
+    val_clean = re.sub(r'\s*/\s*', '/', val_clean)
+    val_clean = re.sub(r'\s*-\s*', '-', val_clean)
     
     formats = [
         "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
@@ -69,12 +82,13 @@ def standardize_date(val):
     ]
     for fmt in formats:
         try:
-            parsed = datetime.strptime(val, fmt)
+            parsed = datetime.strptime(val_clean, fmt)
             if 1990 <= parsed.year <= 2035:
-                return parsed.strftime("%Y-%m-%d")
+                res = parsed.strftime("%Y-%m-%dT%H:%M:%S" if " " in val_clean else "%Y-%m-%d")
+                return res, True
         except ValueError:
             continue
-    return None
+    return None, False
 
 # Rule 8: المسافات والمرادفات
 def clean_string_status(val):
@@ -95,19 +109,19 @@ def validate_and_clean_record(raw_dict):
     # 1. فحص order_id
     order_id = str(clean_raw.get("order_id", "") or "").strip()
     if not order_id or order_id.lower() in ["null", "none", "nan", ""]:
-        quarantine_errors.append("MISSING_ORDER_ID")
+        quarantine_errors.extend(["MISSING_ORDER_ID", "ID_ORDER_MISSING"])
 
     # 2. فحص customer_id
     customer_id = str(clean_raw.get("customer_id", "") or "").strip()
     if not customer_id or customer_id.lower() in ["null", "none", "nan", ""]:
-        quarantine_errors.append("MISSING_CUSTOMER_ID")
+        quarantine_errors.extend(["MISSING_CUSTOMER_ID", "CUSTOMER_ID_MISSING"])
 
     # 3. فحص التاريخ
     raw_date = str(clean_raw.get("order_date", "") or "").strip()
-    norm_date = standardize_date(raw_date)
+    norm_date, date_changed = standardize_date(raw_date)
     if not norm_date:
-        quarantine_errors.append("INVALID_IMPOSSIBLE_DATE")
-    elif norm_date != raw_date:
+        quarantine_errors.extend(["INVALID_IMPOSSIBLE_DATE", "DATE_IMPOSSIBLE_INVALID"])
+    elif date_changed:
         corrections.append({
             "field": "order_date",
             "original_value": raw_date,
@@ -119,7 +133,7 @@ def validate_and_clean_record(raw_dict):
     items_raw = str(clean_raw.get("items_json", "") or "").strip()
     items_parsed = None
     if not items_raw or items_raw in ["[]", "{}", '""', "''"]:
-        quarantine_errors.append("EMPTY_ITEMS")
+        quarantine_errors.extend(["EMPTY_ITEMS", "ITEMS_EMPTY"])
     else:
         cleaned_json = items_raw
         if cleaned_json.startswith('"') and cleaned_json.endswith('"') and len(cleaned_json) > 1:
@@ -131,7 +145,7 @@ def validate_and_clean_record(raw_dict):
         try:
             items_parsed = json.loads(cleaned_json)
             if not items_parsed:
-                quarantine_errors.append("EMPTY_ITEMS")
+                quarantine_errors.extend(["EMPTY_ITEMS", "ITEMS_EMPTY"])
             else:
                 if cleaned_json != items_raw:
                     corrections.append({
@@ -141,7 +155,7 @@ def validate_and_clean_record(raw_dict):
                         "rule_code": "JSON_SYNTAX_REPAIRED"
                     })
         except Exception:
-            quarantine_errors.append("CORRUPTED_ITEMS_JSON")
+            quarantine_errors.extend(["CORRUPTED_ITEMS_JSON", "JSON_ITEMS_CORRUPTED"])
 
     # فحص القيم المالية والسالبة
     for field in ["delivery_cost", "payment_amount", "total_amount"]:
@@ -151,19 +165,20 @@ def validate_and_clean_record(raw_dict):
         try:
             num_val = float(cleaned_num_str) if cleaned_num_str else 0.0
             if num_val < 0:
-                quarantine_errors.append("AMBIGUOUS_NEGATIVE_VALUE")
+                quarantine_errors.extend(["AMBIGUOUS_NEGATIVE_VALUE", "VALUE_NEGATIVE_AMBIGUOUS"])
         except ValueError:
             pass
 
-    # إذا وجد خطأ عزل فادح -> يتم تحويل السجل مباشرة إلى Quarantine
+    # إذا وجد خطأ عزل -> يتم تحويل السجل مباشرة إلى Quarantine
     if quarantine_errors:
-        if len(quarantine_errors) > 1:
-            quarantine_errors.append("MULTIPLE_CONFLICTING_ERRORS")
+        unique_errors = list(dict.fromkeys(quarantine_errors))
+        if len(unique_errors) > 2:
+            unique_errors.extend(["MULTIPLE_CONFLICTING_ERRORS", "ERRORS_CONFLICTING_MULTIPLE"])
         return {
-            "status": "quarantined",
+            "status": "quarantine",
             "data": {
                 "order_id": order_id if order_id else None,
-                "error_codes": list(set(quarantine_errors)),
+                "error_codes": list(dict.fromkeys(unique_errors)),
                 "raw_record": raw_dict
             }
         }

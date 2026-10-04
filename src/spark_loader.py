@@ -3,24 +3,74 @@ import os
 import time
 from datetime import datetime
 
+# ============================================================
+# Python / Hadoop configuration
+# ============================================================
+
 os.environ["PYSPARK_PYTHON"] = sys.executable
 os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
 
-if os.path.exists("C:\\hadoop"):
-    os.environ["HADOOP_HOME"] = "C:\\hadoop"
-    os.environ["hadoop.home.dir"] = "C:\\hadoop"
-    os.environ["PATH"] = "C:\\hadoop\\bin;" + os.environ.get("PATH", "")
+if os.path.exists(r"C:\hadoop"):
+    os.environ["HADOOP_HOME"] = r"C:\hadoop"
+    os.environ["hadoop.home.dir"] = r"C:\hadoop"
+    os.environ["PATH"] = (
+        r"C:\hadoop\bin;" + os.environ.get("PATH", "")
+    )
+
+# ============================================================
+# Spark imports
+# ============================================================
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import spark_partition_id, row_number, lit, col
-from pyspark.sql.window import Window
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from pyspark.sql.functions import (
+    monotonically_increasing_id,
+    lit,
+    col,
+    struct,
+    spark_partition_id
+)
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    StringType
+)
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from config.settings import MONGO_URI, DB_NAME, COLLECTION_RAW
+# ============================================================
+# Project imports
+# ============================================================
+
+sys.path.append(
+    os.path.dirname(
+        os.path.dirname(
+            os.path.abspath(__file__)
+        )
+    )
+)
+
+from config.settings import (
+    MONGO_URI,
+    DB_NAME,
+    COLLECTION_RAW
+)
+
 from src.monitor import SystemMonitor
 
+
+# ============================================================
+# MongoDB Spark Connector
+# ============================================================
+
+MONGO_SPARK_CONNECTOR = (
+    "org.mongodb.spark:mongo-spark-connector_2.12:10.7.0"
+)
+
+
+# ============================================================
+# Spark Session
+# ============================================================
+
 def get_spark_session():
+
     jvm_flags = (
         "--add-opens=java.base/java.lang=ALL-UNNAMED "
         "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED "
@@ -31,138 +81,366 @@ def get_spark_session():
         "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
     )
 
-    return SparkSession.builder \
-        .appName("HybridDataPipeline_SparkEngine") \
-        .master("local[2]") \
-        .config("spark.driver.memory", "4g") \
-        .config("spark.executor.memory", "4g") \
-        .config("spark.driver.extraJavaOptions", jvm_flags) \
-        .config("spark.executor.extraJavaOptions", jvm_flags) \
-        .config("spark.python.worker.reuse", "true") \
+    spark = (
+        SparkSession.builder
+        .appName("HybridDataPipeline_SparkEngine")
+
+        # Important:
+        # keep concurrency reasonable for 16 GB RAM
+        .master("local[2]")
+
+        # MongoDB Spark Connector 10.7.0
+        .config(
+            "spark.jars.packages",
+            MONGO_SPARK_CONNECTOR
+        )
+
+        # Memory
+        .config(
+            "spark.driver.memory",
+            "4g"
+        )
+        .config(
+            "spark.executor.memory",
+            "4g"
+        )
+
+        # JVM compatibility
+        .config(
+            "spark.driver.extraJavaOptions",
+            jvm_flags
+        )
+        .config(
+            "spark.executor.extraJavaOptions",
+            jvm_flags
+        )
+
+        # Python
+        .config(
+            "spark.pyspark.python",
+            sys.executable
+        )
+        .config(
+            "spark.pyspark.driver.python",
+            sys.executable
+        )
+
+        # Worker stability
+        .config(
+            "spark.python.worker.reuse",
+            "false"
+        )
+
+        # Mongo defaults
+        .config(
+            "spark.mongodb.write.connection.uri",
+            MONGO_URI
+        )
+        .config(
+            "spark.mongodb.write.database",
+            DB_NAME
+        )
+        .config(
+            "spark.mongodb.write.collection",
+            COLLECTION_RAW
+        )
+
+        # Do NOT create a huge shuffle
+        .config(
+            "spark.sql.shuffle.partitions",
+            "8"
+        )
+
         .getOrCreate()
+    )
+
+    return spark
+
+
+# ============================================================
+# Main PySpark Loader
+# ============================================================
 
 def run_spark_loader(file_path, run_id):
+
     monitor = SystemMonitor(interval=4)
     monitor.start()
 
     spark = get_spark_session()
+
     start_time = time.time()
+
     file_name = os.path.basename(file_path)
+
     current_time_str = datetime.utcnow().isoformat()
 
+    total_rows = 0
+    input_partitions = 0
+
+    # ========================================================
+    # Fixed schema
+    # ========================================================
+
     columns = [
-        "order_id", "order_date", "status", "customer_id", "customer_name",
-        "customer_phone", "customer_email", "city", "district", "delivery_type",
-        "delivery_cost", "payment_method", "payment_status", "payment_amount",
-        "currency", "total_amount", "items_json"
+        "order_id",
+        "order_date",
+        "status",
+        "customer_id",
+        "customer_name",
+        "customer_phone",
+        "customer_email",
+        "city",
+        "district",
+        "delivery_type",
+        "delivery_cost",
+        "payment_method",
+        "payment_status",
+        "payment_amount",
+        "currency",
+        "total_amount",
+        "items_json"
     ]
-    schema = StructType([StructField(c, StringType(), True) for c in columns])
+
+    # ALL RAW FIELDS ARE STRING
+    # This is intentional for ELT/raw ingestion.
+
+    schema = StructType([
+        StructField(
+            column,
+            StringType(),
+            True
+        )
+        for column in columns
+    ])
 
     try:
-        print(f"\n[PySpark Engine] Reading dataset: {file_path}")
-        df = spark.read.format("csv") \
-            .option("header", "true") \
-            .option("encoding", "UTF-8") \
-            .schema(schema) \
+
+        # ====================================================
+        # 1. READ CSV
+        # ====================================================
+
+        print()
+        print("=" * 70)
+        print("[PySpark Engine] Reading large dataset")
+        print("=" * 70)
+
+        print(f"File: {file_path}")
+
+        df = (
+            spark.read
+            .format("csv")
+            .option("header", "true")
+            .option("encoding", "UTF-8")
+            .option("mode", "PERMISSIVE")
+            .option("quote", "\"")
+            .option("escape", "\"")
+            .schema(schema)
             .load(file_path)
-
-        # 1. حساب عدد السجلات لكل Partition
-        df_with_pid = df.withColumn("_pid", spark_partition_id())
-        part_counts = df_with_pid.groupBy("_pid").count().orderBy("_pid").collect()
-
-        # 2. بناء خريطة الإزاحة التراكمية (Cumulative Offsets)
-        offsets = []
-        cum = 0
-        for row in part_counts:
-            offsets.append((int(row["_pid"]), int(cum)))
-            cum += int(row["count"])
-
-        offsets_df = spark.createDataFrame(offsets, ["_pid", "_offset"])
-        w = Window.partitionBy("_pid").orderBy(lit(1))
-
-        # 3. دمج الإزاحة وتوليد source_row_number بنوع Int32 متسلسل دقيق
-        df_indexed = (
-            df_with_pid.join(offsets_df, on="_pid")
-            .withColumn("source_row_number", (col("_offset") + row_number().over(w)).cast(IntegerType()))
-            .drop("_pid", "_offset")
         )
 
-        input_partitions = df_indexed.rdd.getNumPartitions()
-        print(f"[PySpark Engine] Partitions allocated: {input_partitions} | Total Expected Records: {cum:,}")
+        # ====================================================
+        # 2. INPUT PARTITIONS
+        # ====================================================
 
-        def insert_partition_to_raw(partition_iter):
-            from pymongo import MongoClient
-            import time
+        input_partitions = df.rdd.getNumPartitions()
 
-            client = MongoClient(
-                MONGO_URI,
-                connectTimeoutMS=60000,
-                socketTimeoutMS=120000,
-                serverSelectionTimeoutMS=60000
+        print(
+            f"[PySpark Engine] Input partitions: "
+            f"{input_partitions}"
+        )
+
+        # ====================================================
+        # 3. BUILD DOCUMENTS
+        # ====================================================
+        #
+        # IMPORTANT:
+        #
+        # We DO NOT use:
+        #
+        # groupBy()
+        # join()
+        # Window()
+        # row_number()
+        #
+        # because these cause a huge shuffle on the 12.65 GB
+        # dataset.
+        #
+        # monotonically_increasing_id() is generated by Spark
+        # without a Python UDF and without a global shuffle.
+        #
+        # It gives a unique Long ID.
+        #
+        # ====================================================
+
+        print(
+            "[PySpark Engine] Building raw documents..."
+        )
+
+        documents_df = (
+            df
+
+            # Unique source identifier generated by Spark.
+            .withColumn(
+                "source_row_number",
+                (
+                    monotonically_increasing_id()
+                    + lit(1)
+                ).cast("long")
             )
-            raw_col = client[DB_NAME][COLLECTION_RAW]
-            batch = []
-            count = 0
 
-            def flush_batch(b):
-                if not b:
-                    return
-                for attempt in range(5):
-                    try:
-                        raw_col.insert_many(b, ordered=False)
-                        break
-                    except Exception:
-                        if attempt == 4:
-                            raise
-                        time.sleep(2)
+            .withColumn(
+                "run_id",
+                lit(run_id)
+            )
 
-            try:
-                for row in partition_iter:
-                    row_dict = row.asDict()
-                    row_num = row_dict.pop("source_row_number", None)
-                    clean_dict = {
-                        str(k).replace('\ufeff', '').strip(): (str(v) if v is not None else "")
-                        for k, v in row_dict.items() if k
-                    }
+            .withColumn(
+                "source_file",
+                lit(file_name)
+            )
 
-                    batch.append({
-                        "run_id": run_id,
-                        "source_file": file_name,
-                        "source_row_number": int(row_num) if row_num is not None else None,
-                        "ingested_at": current_time_str,
-                        "engine_used": "pyspark",
-                        "raw_record": clean_dict
-                    })
-                    count += 1
+            .withColumn(
+                "ingested_at",
+                lit(current_time_str)
+            )
 
-                    if len(batch) >= 2000:
-                        flush_batch(batch)
-                        batch = []
+            .withColumn(
+                "engine_used",
+                lit("pyspark")
+            )
 
-                if batch:
-                    flush_batch(batch)
-            finally:
-                client.close()
+            .withColumn(
+                "raw_record",
+                struct(
+                    *[
+                        col(column).alias(column)
+                        for column in columns
+                    ]
+                )
+            )
 
-            yield count
+            .select(
+                "run_id",
+                "source_file",
+                "source_row_number",
+                "ingested_at",
+                "engine_used",
+                "raw_record"
+            )
+        )
 
-        print("[PySpark Engine] Ingesting partitioned data to orders_raw...")
-        counts = df_indexed.rdd.mapPartitions(insert_partition_to_raw).collect()
-        total_rows = sum(counts)
+        # ====================================================
+        # 4. WRITE DIRECTLY TO MONGODB
+        # ====================================================
+
+        print()
+        print(
+            "[PySpark Engine] Writing raw records to MongoDB..."
+        )
+
+        print(
+            "[PySpark Engine] MongoDB Spark Connector: 10.7.0"
+        )
+
+        write_start = time.time()
+
+        (
+            documents_df.write
+            .format("mongodb")
+            .mode("append")
+
+            .option(
+                "connection.uri",
+                MONGO_URI
+            )
+
+            .option(
+                "database",
+                DB_NAME
+            )
+
+            .option(
+                "collection",
+                COLLECTION_RAW
+            )
+
+            .option(
+                "maxBatchSize",
+                "2000"
+            )
+
+            .save()
+        )
+
+        write_duration = time.time() - write_start
+
+        # ====================================================
+        # 5. COUNT AFTER SUCCESSFUL WRITE
+        # ====================================================
+
+        #
+        # We only count AFTER the Mongo write.
+        #
+        # This avoids doing an expensive count before ingestion.
+        #
+
+        total_rows = documents_df.count()
+
+        print()
+        print(
+            "[PySpark Engine] MongoDB write completed successfully."
+        )
+
+        print(
+            f"[PySpark Engine] Write time: "
+            f"{write_duration:.2f} seconds"
+        )
 
     finally:
+
         monitor.stop()
+
         spark.stop()
 
-    total_time = time.time() - start_time
-    avg_throughput = total_rows / total_time if total_time > 0 else 0
+    # ========================================================
+    # 6. METRICS
+    # ========================================================
 
-    print(f"\n[PySpark Engine] Ingestion complete: {total_rows:,} rows loaded in {total_time:.2f}s | Throughput: {avg_throughput:.1f} rows/s\n")
+    total_time = time.time() - start_time
+
+    throughput = (
+        total_rows / total_time
+        if total_time > 0
+        else 0
+    )
+
+    print()
+    print("=" * 70)
+    print("[PySpark Engine] INGESTION COMPLETE")
+    print("=" * 70)
+
+    print(
+        f"Rows loaded      : {total_rows:,}"
+    )
+
+    print(
+        f"Input partitions : {input_partitions}"
+    )
+
+    print(
+        f"Total time       : {total_time:.2f} seconds"
+    )
+
+    print(
+        f"Throughput       : {throughput:,.1f} rows/sec"
+    )
+
+    print("=" * 70)
+    print()
 
     return {
         "engine": "pyspark",
         "loaded_raw": total_rows,
         "seconds_elapsed": total_time,
-        "throughput": avg_throughput,
+        "throughput": throughput,
         "partitions": input_partitions
     }
